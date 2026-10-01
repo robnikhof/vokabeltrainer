@@ -18,33 +18,35 @@ eigene Karten pro Person und Synchronisierung über alle Geräte.
 
 - **Hosting:** Cloudflare Worker `vokabeltrainer` mit Static Assets, verbunden mit diesem Repo.
   Jeder Push auf `main` wird automatisch veröffentlicht.
-- **Daten:** Cloudflare D1 (`vokabeltrainer`). Jede Karte gehört zu einer E-Mail-Adresse.
-- **Login:** Cloudflare Access (Einmal-Code per E-Mail). Die API prüft das signierte Access-Token
-  und nutzt die E-Mail darin als Benutzerkennung.
+- **Daten:** Cloudflare D1 (`vokabeltrainer`). Jede Karte gehört zu einer Person.
+- **Login:** Persönlicher Zugangsschlüssel pro Person, hinterlegt als Worker-Secret
+  `USERKEY_<NAME>`. Die App sendet ihn als `Authorization: Bearer …`, der Name ist die Benutzerkennung.
 - **Offline:** Karten liegen zusätzlich im localStorage. Änderungen werden hochgeladen,
   sobald wieder Netz da ist. Bei Konflikten gewinnt die zuletzt bearbeitete Version.
 
 ## Einrichtung in Cloudflare (einmalig)
 
-1. **Access einschalten:** Worker → Einstellungen → Domains & Routes → bei `workers.dev`
-   „Enable Cloudflare Access“. Unter „Manage Cloudflare Access“ die erlaubten E-Mail-Adressen eintragen.
-2. **Variablen setzen:** Worker → Einstellungen → Variablen und Geheimnisse:
-   - `ACCESS_TEAM_DOMAIN` = `<team>.cloudflareaccess.com`
-   - `ALLOWED_EMAILS` = kommagetrennte E-Mail-Adressen (zweite Sicherung, empfohlen)
-   - `ACCESS_AUD` = optional, „Application Audience (AUD) Tag“ der Access-Anwendung
+Pro Person ein Secret im Worker anlegen (Settings → Variables and Secrets, Typ **Secret**):
 
-Die D1-Bindung steht in `wrangler.jsonc` und muss nicht im Dashboard gesetzt werden.
-Solange `ACCESS_TEAM_DOMAIN` fehlt, läuft die App rein lokal im Browser (grauer Punkt oben rechts).
+- `USERKEY_ROBERT` = langer Zufallsschlüssel (mind. 20 Zeichen)
+- `USERKEY_HEIKE` = langer Zufallsschlüssel
+
+Neue Person: weiteres Secret `USERKEY_<NAME>` anlegen. Schlüssel erzeugen z. B. mit
+`python3 -c "import secrets; print(secrets.token_urlsafe(24))"`.
+
+Anmelden in der App: Schlüssel einmal pro Gerät eingeben, oder den persönlichen Link
+`https://<adresse>/#key=<schlüssel>` öffnen. Die D1-Bindung steht in `wrangler.jsonc`.
+Solange kein `USERKEY_*`-Secret existiert, läuft die App rein lokal im Browser.
 
 ## Lokal entwickeln
 
 ```bash
-echo "DEV_USER=ich@example.com" > .dev.vars
+echo "USERKEY_ICH=lokaler-test-schluessel-123456" > .dev.vars   # oder DEV_USER=ich
 npx wrangler d1 execute DB --local --file schema.sql
 npx wrangler dev
 ```
 
-`DEV_USER` überspringt Access und darf **nie** in Produktion gesetzt werden.
+`DEV_USER` überspringt die Schlüsselprüfung und darf **nie** in Produktion gesetzt werden.
 Ein anderer Benutzer lässt sich lokal mit dem Header `X-Dev-User` simulieren.
 
 ## App aktualisieren

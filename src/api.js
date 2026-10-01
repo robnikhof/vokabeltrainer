@@ -1,27 +1,26 @@
 /*
- * Vokabeltrainer API (Cloudflare Pages Function)
+ * Vokabeltrainer API (Cloudflare Worker, /api/*)
  *
- *   GET  /api/me                 -> { email, serverTime }
+ *   GET  /api/me                 -> { user, name, serverTime }
  *   GET  /api/sync?since=<ms>    -> { serverTime, cards: [...], settings: {...}|null }
  *   POST /api/sync               <- { cards: [...], settings: {...}|null }
  *                                -> { serverTime, accepted }
  *
- * Who is asking comes from Cloudflare Access: every request carries a signed
- * JWT (header Cf-Access-Jwt-Assertion, or cookie CF_Authorization). We verify
- * the signature against the team's public keys and use the email inside it as
- * the user key, so each person only ever sees their own cards.
+ * Login: every person has a personal access key, stored as a Worker secret
+ * named USERKEY_<NAME> (e.g. USERKEY_ROBERT, USERKEY_HEIKE). The app sends it
+ * as "Authorization: Bearer <key>". The matching secret's name, lowercased
+ * ("robert", "heike"), is the user id, so each person only sees their own cards.
  *
- * Environment (Pages project -> Settings):
- *   DB                  D1 binding (required)
- *   ACCESS_TEAM_DOMAIN  e.g. "meinteam.cloudflareaccess.com" (required)
- *   ACCESS_AUD          optional: Application Audience (AUD) tag; if set, tokens must be issued for this app
- *   ALLOWED_EMAILS      optional, comma-separated allow-list
- *   DEV_USER            local development only: skips Access, never set in production
+ * Environment:
+ *   DB              D1 binding (required, set in wrangler.jsonc)
+ *   USERKEY_<NAME>  one secret per person (required, at least one)
+ *   DEV_USER        local development only: skips the key check, never set in production
  */
 
 const MAX_CARDS_PER_PUSH = 500;
 const MAX_CARD_BYTES = 16 * 1024;
 const PULL_OVERLAP_MS = 5000;
+const MIN_KEY_LENGTH = 20;
 
 export async function onRequest(context) {
   const { request, env } = context;
@@ -29,21 +28,17 @@ export async function onRequest(context) {
   const path = url.pathname.replace(/\/+$/, "");
 
   if (!env.DB) return json({ error: "not_configured", detail: "D1-Binding 'DB' fehlt" }, 503);
-  if (!env.DEV_USER && !env.ACCESS_TEAM_DOMAIN) {
-    return json({ error: "not_configured", detail: "ACCESS_TEAM_DOMAIN fehlt" }, 503);
+  const users = userKeys(env);
+  if (!env.DEV_USER && !users.length) {
+    return json({ error: "not_configured", detail: "Kein USERKEY_*-Secret gesetzt" }, 503);
   }
 
-  let user;
-  try {
-    user = await authenticate(request, env);
-  } catch (e) {
-    return json({ error: "auth_failed", detail: String(e && e.message || e) }, 401);
-  }
+  const user = await authenticate(request, env, users);
   if (!user) return json({ error: "unauthenticated" }, 401);
 
   try {
     if (path === "/api/me" && request.method === "GET") {
-      return json({ email: user, serverTime: Date.now() });
+      return json({ user, name: user.charAt(0).toUpperCase() + user.slice(1), serverTime: Date.now() });
     }
     if (path === "/api/sync" && request.method === "GET") {
       return await pull(env, user, url);
@@ -125,102 +120,45 @@ async function push(env, user, request) {
 
 /* ------------------------------------------------------------------ auth */
 
-async function authenticate(request, env) {
-  // Local development only (wrangler pages dev). Never set DEV_USER in production.
-  if (env.DEV_USER) {
-    return normalizeEmail(request.headers.get("X-Dev-User") || env.DEV_USER);
+function userKeys(env) {
+  const out = [];
+  for (const name of Object.keys(env)) {
+    const m = /^USERKEY_([A-Z0-9_]+)$/i.exec(name);
+    if (!m) continue;
+    const key = String(env[name] || "").trim();
+    if (key.length < MIN_KEY_LENGTH) continue;          // zu kurze Schlüssel ignorieren
+    out.push({ user: m[1].toLowerCase(), key });
   }
-
-  const team = String(env.ACCESS_TEAM_DOMAIN || "").replace(/^https?:\/\//, "").replace(/\/.*$/, "");
-  const aud = String(env.ACCESS_AUD || "").trim();
-  if (!team) throw new Error("ACCESS_TEAM_DOMAIN nicht gesetzt");
-
-  const token = request.headers.get("Cf-Access-Jwt-Assertion") || readCookie(request, "CF_Authorization");
-  if (!token) return null;
-
-  const payload = await verifyAccessJwt(token, team, aud);
-  const email = normalizeEmail(payload.email);
-  if (!email) return null;
-
-  const allow = String(env.ALLOWED_EMAILS || "").split(",").map(normalizeEmail).filter(Boolean);
-  if (allow.length && allow.indexOf(email) === -1) return null;
-  return email;
-}
-
-let keyCache = { team: "", at: 0, keys: {} };
-
-async function getKeys(team, forceRefresh) {
-  const fresh = keyCache.team === team && Date.now() - keyCache.at < 3600 * 1000;
-  if (fresh && !forceRefresh) return keyCache.keys;
-  const res = await fetch("https://" + team + "/cdn-cgi/access/certs");
-  if (!res.ok) throw new Error("Access-Zertifikate nicht abrufbar (" + res.status + ")");
-  const body = await res.json();
-  const keys = {};
-  for (const jwk of body.keys || []) {
-    keys[jwk.kid] = await crypto.subtle.importKey(
-      "jwk", jwk, { name: "RSASSA-PKCS1-v1_5", hash: "SHA-256" }, false, ["verify"]
-    );
-  }
-  keyCache = { team, at: Date.now(), keys };
-  return keys;
-}
-
-async function verifyAccessJwt(token, team, aud) {
-  const parts = token.split(".");
-  if (parts.length !== 3) throw new Error("JWT ungültig");
-  const header = JSON.parse(b64urlText(parts[0]));
-  const payload = JSON.parse(b64urlText(parts[1]));
-  if (header.alg !== "RS256") throw new Error("JWT-Algorithmus unerwartet");
-
-  let keys = await getKeys(team, false);
-  let key = keys[header.kid];
-  if (!key) { keys = await getKeys(team, true); key = keys[header.kid]; }
-  if (!key) throw new Error("JWT-Schlüssel unbekannt");
-
-  const ok = await crypto.subtle.verify(
-    "RSASSA-PKCS1-v1_5", key, b64urlBytes(parts[2]),
-    new TextEncoder().encode(parts[0] + "." + parts[1])
-  );
-  if (!ok) throw new Error("JWT-Signatur ungültig");
-
-  const now = Math.floor(Date.now() / 1000);
-  if (typeof payload.exp === "number" && payload.exp < now) throw new Error("JWT abgelaufen");
-  if (typeof payload.nbf === "number" && payload.nbf > now + 60) throw new Error("JWT noch nicht gültig");
-  if (aud) {
-    const auds = Array.isArray(payload.aud) ? payload.aud : [payload.aud];
-    if (auds.indexOf(aud) === -1) throw new Error("JWT-Audience passt nicht");
-  }
-  if (payload.iss && payload.iss !== "https://" + team) throw new Error("JWT-Aussteller passt nicht");
-  return payload;
-}
-
-/* --------------------------------------------------------------- helpers */
-
-function normalizeEmail(e) {
-  return String(e || "").trim().toLowerCase();
-}
-
-function readCookie(request, name) {
-  const raw = request.headers.get("Cookie") || "";
-  for (const part of raw.split(";")) {
-    const i = part.indexOf("=");
-    if (i > -1 && part.slice(0, i).trim() === name) return part.slice(i + 1).trim();
-  }
-  return "";
-}
-
-function b64urlBytes(s) {
-  s = s.replace(/-/g, "+").replace(/_/g, "/");
-  while (s.length % 4) s += "=";
-  const bin = atob(s);
-  const out = new Uint8Array(bin.length);
-  for (let i = 0; i < bin.length; i++) out[i] = bin.charCodeAt(i);
   return out;
 }
 
-function b64urlText(s) {
-  return new TextDecoder().decode(b64urlBytes(s));
+async function authenticate(request, env, users) {
+  // Local development only (wrangler dev). Never set DEV_USER in production.
+  if (env.DEV_USER) {
+    return String(request.headers.get("X-Dev-User") || env.DEV_USER).trim().toLowerCase();
+  }
+  const h = request.headers.get("Authorization") || "";
+  const m = /^Bearer\s+(.+)$/i.exec(h);
+  if (!m) return null;
+  const given = await sha256(m[1].trim());
+  for (const u of users) {
+    if (timingSafeEqual(given, await sha256(u.key))) return u.user;
+  }
+  return null;
 }
+
+async function sha256(text) {
+  return new Uint8Array(await crypto.subtle.digest("SHA-256", new TextEncoder().encode(text)));
+}
+
+function timingSafeEqual(a, b) {
+  if (a.length !== b.length) return false;
+  let diff = 0;
+  for (let i = 0; i < a.length; i++) diff |= a[i] ^ b[i];
+  return diff === 0;
+}
+
+/* --------------------------------------------------------------- helpers */
 
 function json(obj, status) {
   return new Response(JSON.stringify(obj), {

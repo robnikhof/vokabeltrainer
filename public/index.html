@@ -170,11 +170,11 @@
   .field{display:flex;flex-direction:column;gap:7px;margin-bottom:16px}
   .field > label,.field > .lbl{font-size:11px;letter-spacing:.14em;text-transform:uppercase;color:var(--butter-mute);font-weight:600}
   .field .opt{text-transform:none;letter-spacing:0;font-weight:400;opacity:.7}
-  input[type=text],input[type=number],textarea,select{
+  input[type=text],input[type=password],input[type=number],textarea,select{
     width:100%;background:var(--cocoa);border:1px solid var(--rule);
     border-radius:10px;padding:13px 14px;color:var(--butter-bright);
   }
-  input[type=text]:focus,textarea:focus,select:focus{border-color:var(--rule-strong);outline:none;background:var(--lift)}
+  input[type=text]:focus,input[type=password]:focus,textarea:focus,select:focus{border-color:var(--rule-strong);outline:none;background:var(--lift)}
   input::placeholder,textarea::placeholder{color:rgba(185,153,106,.6)}
   .big{font-family:var(--serif);font-size:27px!important;padding:10px 14px 12px!important;line-height:1.2}
   textarea{resize:vertical;min-height:62px;line-height:1.45}
@@ -514,6 +514,23 @@
   </div>
 </div>
 
+<!-- Anmeldung mit persönlichem Zugangsschlüssel -->
+<div class="scrim" id="login-scrim" hidden>
+  <div class="sheet" role="dialog" aria-modal="true" aria-labelledby="login-title">
+    <h2 id="login-title">Anmelden</h2>
+    <p class="lead">Gib deinen persönlichen Zugangsschlüssel ein. Das ist nur einmal pro Gerät nötig, danach bleibst du angemeldet.</p>
+    <div class="field">
+      <label for="f-key">Zugangsschlüssel</label>
+      <input type="password" id="f-key" autocapitalize="off" autocomplete="current-password" spellcheck="false" enterkeyhint="go">
+    </div>
+    <p class="kbd-hint" id="login-error" style="color:var(--again);text-align:left;margin:-6px 0 14px" hidden></p>
+    <div class="sheet-actions">
+      <button class="primary" type="button" id="login-ok">Anmelden</button>
+      <button class="tool" type="button" id="login-skip">Später</button>
+    </div>
+  </div>
+</div>
+
 <script>
 (function(){
   "use strict";
@@ -544,6 +561,7 @@
   var settings = defaultSettings();     // wird synchronisiert
   var local = defaultLocal();           // nur dieses Gerät
   var backend = "unknown";              // unknown | online | offline | auth | none
+  var accessKey = "", displayName = "", loginSkipped = false;
   var pulledOnce = false;
   var syncing = false, syncAgain = false, pushTimer = null, lastSyncAt = 0;
   var current = null, revealed = false, sessionCount = 0;
@@ -797,7 +815,7 @@
     busy: "Synchronisiere …",
     synced: "Mit deinem Konto synchronisiert",
     offline: "Offline – wird synchronisiert, sobald du wieder Netz hast",
-    auth: "Anmeldung abgelaufen – unter Karten neu anmelden"
+    auth: "Nicht angemeldet – unter Karten anmelden"
   };
   function setSync(state){
     var el = document.getElementById("sync");
@@ -823,11 +841,11 @@
   function api(path, opts){
     opts = opts || {};
     opts.credentials = "same-origin";
-    opts.redirect = "manual";            // Access leitet bei abgelaufener Sitzung um
     opts.headers = opts.headers || {};
     opts.headers["Accept"] = "application/json";
+    if(accessKey) opts.headers["Authorization"] = "Bearer " + accessKey;
     return fetch(API + path, opts).then(function(res){
-      if(res.type === "opaqueredirect" || res.status === 401 || res.status === 403){
+      if(res.status === 401 || res.status === 403){
         var e = new Error("auth"); e.kind = "auth"; throw e;
       }
       var ct = res.headers.get("Content-Type") || "";
@@ -846,7 +864,8 @@
   function connect(){
     setSync(backend === "online" ? "busy" : stateFor(backend));
     return api("me").then(function(me){
-      var email = String(me.email || "").toLowerCase();
+      var email = String(me.user || "").toLowerCase();
+      displayName = me.name || email;
       if(email && email !== user){
         var prev = user, prevCards = cards, prevDirty = dirty, prevSettings = settings, prevLocal = local;
         loadUser(email);
@@ -877,9 +896,36 @@
     return "local";
   }
   function afterConnect(){
+    if(backend === "auth" && !loginSkipped){ openLogin(); renderAll(); return; }
     if(!settings.langs) openLangPicker();
     else maybeSeed();
     renderAll();
+  }
+
+  /* ===================== Anmeldung ===================== */
+  function openLogin(msg){
+    var err = document.getElementById("login-error");
+    err.hidden = !msg; err.textContent = msg || "";
+    document.getElementById("login-scrim").hidden = false;
+    setTimeout(function(){ document.getElementById("f-key").focus(); }, 40);
+  }
+  function submitLogin(){
+    var key = document.getElementById("f-key").value.trim();
+    if(!key){ openLogin("Bitte den Schlüssel eingeben."); return; }
+    var prevKey = accessKey;
+    accessKey = key;
+    var btn = document.getElementById("login-ok");
+    btn.disabled = true; btn.textContent = "Prüfe …";
+    api("me").then(function(){
+      writeLS("vt.key", key);
+      document.getElementById("f-key").value = "";
+      document.getElementById("login-scrim").hidden = true;
+      loginSkipped = false;
+      return connect();
+    }).catch(function(e){
+      accessKey = prevKey;
+      openLogin(e.kind === "auth" ? "Dieser Schlüssel ist nicht gültig." : (e.kind === "offline" ? "Keine Verbindung – bitte später nochmal versuchen." : "Der Server ist noch nicht eingerichtet."));
+    }).then(function(){ btn.disabled = false; btn.textContent = "Anmelden"; });
   }
 
   function sync(){
@@ -1217,15 +1263,15 @@
     var add = function(html){ var s = document.createElement("span"); s.innerHTML = html; el.appendChild(s); };
     if(user !== "local"){
       add("Angemeldet als <b></b>. ");
-      el.querySelector("b").textContent = user;
+      el.querySelector("b").textContent = displayName || user;
     }
     var pending = Object.keys(dirty).length;
     if(backend === "online") add("Synchronisiert" + (pending ? ", " + pending + " Änderungen ausstehend." : ". Deine Karten sind auf allen Geräten gleich."));
-    else if(backend === "auth") add("Deine Anmeldung ist abgelaufen. Tippe auf „Neu anmelden“.");
+    else if(backend === "auth") add("Nicht angemeldet. Melde dich an, damit deine Karten gesichert und auf allen Geräten gleich sind.");
     else if(backend === "offline") add("Gerade offline. " + (pending ? pending + " Änderungen werden später hochgeladen." : "Alles ist auf diesem Gerät gespeichert."));
     else if(backend === "none") add("Kein Server erreichbar. Die Karten liegen nur in diesem Browser – das Backup ist deine Sicherung.");
     else add("Verbinde …");
-    syncBtn.textContent = backend === "auth" ? "Neu anmelden" : "Jetzt synchronisieren";
+    syncBtn.textContent = backend === "auth" ? "Anmelden" : "Jetzt synchronisieren";
   }
   function renderAll(){ renderLangbar(); renderCounts(); renderDeck(); renderStudy(); renderAccount(); }
 
@@ -1485,6 +1531,13 @@
 
   /* ===================== Verdrahtung ===================== */
   function init(){
+    // Persönlicher Link: …/#key=<schlüssel> speichert den Schlüssel und entfernt ihn aus der Adresse
+    var hk = /[#&]key=([^&]+)/.exec(location.hash || "");
+    if(hk){
+      writeLS("vt.key", decodeURIComponent(hk[1]));
+      try{ history.replaceState(null, "", location.pathname + location.search); }catch(e){}
+    }
+    accessKey = readLS("vt.key", "") || "";
     loadUser(readLS("vt.user", null) || "local");
     applySettingsToForm();
 
@@ -1520,7 +1573,7 @@
         if(e.key === "Escape") closeEditor();
         return;
       }
-      if(!document.getElementById("lang-scrim").hidden) return;
+      if(!document.getElementById("lang-scrim").hidden || !document.getElementById("login-scrim").hidden) return;
       if(document.getElementById("view-study").hidden) return;
       var tag = (e.target.tagName || "").toLowerCase();
       if(tag === "input" || tag === "textarea" || tag === "select") return;
@@ -1555,14 +1608,24 @@
       setSpeak(SPEAK_MODES[(i + 1) % SPEAK_MODES.length], true);
     };
     document.getElementById("btn-sync").onclick = function(){
-      if(backend === "auth"){ location.reload(); return; }
+      if(backend === "auth"){ openLogin(); return; }
       toast("Synchronisiere …");
       connect().then(function(){ toast(backend === "online" ? "Synchronisiert" : "Server nicht erreichbar"); });
     };
     document.getElementById("btn-logout").onclick = function(){
-      if(!confirm("Abmelden? Nicht synchronisierte Änderungen auf diesem Gerät gehen dabei verloren.")) return;
-      try{ localStorage.removeItem("vt.user"); }catch(e){}
-      location.href = "/cdn-cgi/access/logout";
+      var pending = Object.keys(dirty).length;
+      if(!confirm(pending ? "Abmelden? " + pending + " Änderungen sind noch nicht hochgeladen und gehen auf diesem Gerät verloren." : "Auf diesem Gerät abmelden? Deine Karten bleiben auf dem Server gespeichert.")) return;
+      try{ localStorage.removeItem("vt.key"); localStorage.removeItem("vt.user"); }catch(e){}
+      location.reload();
+    };
+    document.getElementById("login-ok").onclick = submitLogin;
+    document.getElementById("f-key").addEventListener("keydown", function(e){
+      if(e.key === "Enter"){ e.preventDefault(); submitLogin(); }
+    });
+    document.getElementById("login-skip").onclick = function(){
+      loginSkipped = true;
+      document.getElementById("login-scrim").hidden = true;
+      afterConnect();
     };
 
     document.getElementById("pick-ok").onclick = function(){
