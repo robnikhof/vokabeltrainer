@@ -1,77 +1,75 @@
-# Vocabulario
+# Vokabeltrainer
 
-A Spanish vocabulary trainer with spaced repetition. One HTML file, no build step,
-no backend. Cards are stored in the browser's local storage on the device you use.
+Vokabeltrainer mit Lernplan (vereinfachtes SM-2) für mehrere Personen und Sprachen.
+Ursprünglich eine Kopie von [julitobonito/vocabulario](https://github.com/julitobonito/vocabulario),
+jetzt eigenständig weiterentwickelt: deutsche Oberfläche, mehrere Sprachen pro Person,
+eigene Karten pro Person und Synchronisierung über alle Geräte.
 
-## Files
+## Aufbau
 
-| File | What it is |
+| Datei | Zweck |
 | --- | --- |
-| `index.html` | The whole app: markup, styles, logic |
-| `manifest.webmanifest` | Makes it installable as a home-screen app |
-| `sw.js` | Service worker, so it opens and works offline |
-| `icon-192.png`, `icon-512.png` | App icons (Spanish flag) |
-| `apple-touch-icon.png` | Home-screen icon on iOS |
+| `index.html` | Die ganze App: Oberfläche, Lernplan, Synchronisierung |
+| `functions/api/[[path]].js` | API als Cloudflare Pages Function (`/api/me`, `/api/sync`) |
+| `schema.sql` | Tabellen der D1-Datenbank |
+| `sw.js` | Service Worker, damit die App offline startet |
+| `manifest.webmanifest`, `*.png` | Installation als App auf dem Homescreen |
 
-## Publishing it on GitHub Pages
+- **Hosting:** Cloudflare Pages, verbunden mit diesem Repo. Jeder Push auf `main` wird veröffentlicht.
+- **Daten:** Cloudflare D1 (`vokabeltrainer`). Jede Karte gehört zu einer E-Mail-Adresse.
+- **Login:** Cloudflare Access (Einmal-Code per E-Mail). Die API prüft das signierte Access-Token
+  und nutzt die E-Mail darin als Benutzerkennung.
+- **Offline:** Karten liegen zusätzlich im localStorage. Änderungen werden hochgeladen,
+  sobald wieder Netz da ist. Bei Konflikten gewinnt die zuletzt bearbeitete Version.
 
-1. Create a new repository on GitHub, e.g. `vocabulario`. Public is fine; Pages on
-   a private repo needs a paid plan.
-2. Upload these files to the root of the repository (drag them into the
-   "uploading an existing file" box, or `git add . && git commit && git push`).
-3. In the repo, go to **Settings → Pages**.
-4. Under **Source**, pick **Deploy from a branch**. Branch: `main`, folder: `/ (root)`. Save.
-5. Wait a minute, then open `https://<your-username>.github.io/vocabulario/`.
+## Einrichtung in Cloudflare (einmalig)
 
-All paths are relative, so it works from a subfolder like `/vocabulario/` without
-any changes.
+1. **D1 an das Pages-Projekt binden:** Pages-Projekt → Einstellungen → Bindungen →
+   D1-Datenbank hinzufügen, Variablenname `DB`, Datenbank `vokabeltrainer`.
+2. **Access einrichten:** Zero Trust → Access → Anwendungen → Self-hosted.
+   Domain = Adresse der App (z. B. `vokabeltrainer.pages.dev`), Sitzungsdauer 1 Monat,
+   Policy „Allow“ mit den erlaubten E-Mail-Adressen, Login-Methode „One-time PIN“.
+3. **Variablen setzen:** Pages-Projekt → Einstellungen → Variablen und Geheimnisse:
+   - `ACCESS_TEAM_DOMAIN` = `<team>.cloudflareaccess.com`
+   - `ACCESS_AUD` = „Application Audience (AUD) Tag“ aus der Access-Anwendung
+   - `ALLOWED_EMAILS` = optional, kommagetrennte E-Mail-Adressen (zweite Sicherung)
+4. Neu bereitstellen (Deployments → Retry), damit Bindung und Variablen greifen.
 
-## Installing it on your phone
+Solange 1–3 fehlen, läuft die App rein lokal im Browser (grauer Punkt oben rechts).
 
-- **iOS (Safari)**: open the URL, tap Share, then *Add to Home Screen*. It must be
-  Safari — Chrome on iOS cannot install web apps.
-- **Android (Chrome)**: open the URL, tap the menu, then *Install app* or
-  *Add to Home screen*.
+## Lokal entwickeln
 
-Once installed it launches full screen, with no browser chrome, and opens offline.
+Eine lokale `wrangler.toml` (nicht einchecken) mit `pages_build_output_dir = "."`, einer
+`[[d1_databases]]`-Bindung `DB` und `[vars] DEV_USER = "ich@example.com"` anlegen, dann:
 
-## Where the data lives
+```bash
+npx wrangler d1 execute DB --local --file schema.sql
+npx wrangler pages dev .
+```
 
-Cards live in `localStorage` on that one device. They survive closing the app and
-restarting the phone. They do **not** sync between devices, and they are gone if
-you clear the browser's site data or delete the app.
+`DEV_USER` überspringt Access und darf **nie** in Produktion gesetzt werden.
+Ein anderer Benutzer lässt sich lokal mit dem Header `X-Dev-User` simulieren.
 
-So: use **Deck → Export backup** now and then. It writes a JSON file you can keep
-anywhere. **Import backup** merges a file back in, matching cards by id and keeping
-whichever copy was edited most recently, so importing on a second device is a
-reasonable manual sync.
+## App aktualisieren
 
-## Updating the app
+`index.html` ändern, dann `VERSION` in `sw.js` erhöhen (`"v2"` → `"v3"`) und beides pushen.
+Ohne das behalten installierte Handys die alte Version im Cache.
 
-Edit `index.html`, then bump `VERSION` in `sw.js` (`"v1"` → `"v2"`) and push both.
-Without the bump, installed phones may keep serving the cached old build.
+## Lernplan
 
-## How the scheduling works
+- Neue Karten: 1 Minute, dann 10 Minuten, dann Abschluss mit 1 Tag (Leicht: sofort 4 Tage).
+- **Nochmal:** Intervall halbiert, Leichtigkeit −0,20, zurück in eine 10-Minuten-Schleife.
+- **Schwer:** Intervall × 1,2, Leichtigkeit −0,15.
+- **Gut:** Intervall × Leichtigkeit (Start 2,5).
+- **Leicht:** Intervall × Leichtigkeit × 1,3, Leichtigkeit +0,15.
+- Leichtigkeit nie unter 1,3, ±5 % Zufall, Obergrenze 3 Jahre.
+- Neue Karten pro Tag: Standard 10, in den Einstellungen änderbar.
 
-A simplified SM-2, the algorithm Anki grew out of.
+## Tastatur
 
-- New cards: 1 minute, then 10 minutes, then they graduate to 1 day.
-- **Again** on a graduated card halves its interval, drops the ease factor by
-  0.20, and puts it back in a 10-minute loop.
-- **Hard** multiplies by 1.2 and drops ease by 0.15.
-- **Good** multiplies by the card's ease factor (starts at 2.5).
-- **Easy** multiplies by ease × 1.3 and raises ease by 0.15.
-- Intervals get ±5% of randomness so cards added on the same day don't clump
-  together forever, and cap out at 3 years.
-
-Each button shows the resulting interval before you press it. New cards per day
-defaults to 20 and is adjustable in Deck → Settings.
-
-## Keyboard shortcuts
-
-| Key | Action |
+| Taste | Aktion |
 | --- | --- |
-| `Space` | Reveal the answer, then grade it Good |
-| `1` `2` `3` `4` | Again / Hard / Good / Easy |
-| `Enter` (Add tab) | Move to the next field, or save from the English field |
-| `Cmd/Ctrl + Enter` | Save from anywhere in the Add form |
+| `Leertaste` | Aufdecken, danach als „Gut“ bewerten |
+| `1` `2` `3` `4` | Nochmal / Schwer / Gut / Leicht |
+| `Enter` (Neu) | Nächstes Feld, im Notizfeld speichern |
+| `Cmd/Strg + Enter` | Speichern |
