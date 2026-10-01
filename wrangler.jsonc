@@ -1,0 +1,30 @@
+{
+  // Vokabeltrainer: Cloudflare Worker mit statischen Dateien (public/) und API (/api/*).
+  // Workers Builds deployt bei jedem Push auf main automatisch mit "npx wrangler deploy".
+  "name": "vokabeltrainer",
+  "main": "src/worker.js",
+  "compatibility_date": "2025-09-01",
+
+  // Adresse <name>.<konto>.workers.dev einschalten, Vorschau-URLs aus.
+  "workers_dev": true,
+  "preview_urls": false,
+
+  // Im Dashboard gesetzte Variablen (ACCESS_TEAM_DOMAIN, ACCESS_AUD, ALLOWED_EMAILS) beim Deploy behalten.
+  "keep_vars": true,
+
+  "assets": {
+    "directory": "./public",
+    "binding": "ASSETS",
+    "run_worker_first": ["/api/*"]
+  },
+
+  "d1_databases": [
+    {
+      "binding": "DB",
+      "database_name": "vokabeltrainer",
+      "database_id": "86a183dc-5dcc-4876-bf8a-c582bb54be42"
+    }
+  ],
+
+  "observability": { "enabled": true }
+}

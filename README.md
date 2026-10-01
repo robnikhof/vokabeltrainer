@@ -9,13 +9,15 @@ eigene Karten pro Person und Synchronisierung über alle Geräte.
 
 | Datei | Zweck |
 | --- | --- |
-| `index.html` | Die ganze App: Oberfläche, Lernplan, Synchronisierung |
-| `functions/api/[[path]].js` | API als Cloudflare Pages Function (`/api/me`, `/api/sync`) |
+| `public/index.html` | Die ganze App: Oberfläche, Lernplan, Synchronisierung |
+| `public/sw.js` | Service Worker, damit die App offline startet |
+| `public/manifest.webmanifest`, `public/*.png` | Installation als App auf dem Homescreen |
+| `src/worker.js`, `src/api.js` | Cloudflare Worker mit API (`/api/me`, `/api/sync`) |
+| `wrangler.jsonc` | Worker-Konfiguration inkl. D1-Bindung |
 | `schema.sql` | Tabellen der D1-Datenbank |
-| `sw.js` | Service Worker, damit die App offline startet |
-| `manifest.webmanifest`, `*.png` | Installation als App auf dem Homescreen |
 
-- **Hosting:** Cloudflare Pages, verbunden mit diesem Repo. Jeder Push auf `main` wird veröffentlicht.
+- **Hosting:** Cloudflare Worker `vokabeltrainer` mit Static Assets, verbunden mit diesem Repo.
+  Jeder Push auf `main` wird automatisch veröffentlicht.
 - **Daten:** Cloudflare D1 (`vokabeltrainer`). Jede Karte gehört zu einer E-Mail-Adresse.
 - **Login:** Cloudflare Access (Einmal-Code per E-Mail). Die API prüft das signierte Access-Token
   und nutzt die E-Mail darin als Benutzerkennung.
@@ -24,27 +26,22 @@ eigene Karten pro Person und Synchronisierung über alle Geräte.
 
 ## Einrichtung in Cloudflare (einmalig)
 
-1. **D1 an das Pages-Projekt binden:** Pages-Projekt → Einstellungen → Bindungen →
-   D1-Datenbank hinzufügen, Variablenname `DB`, Datenbank `vokabeltrainer`.
-2. **Access einrichten:** Zero Trust → Access → Anwendungen → Self-hosted.
-   Domain = Adresse der App (z. B. `vokabeltrainer.pages.dev`), Sitzungsdauer 1 Monat,
-   Policy „Allow“ mit den erlaubten E-Mail-Adressen, Login-Methode „One-time PIN“.
-3. **Variablen setzen:** Pages-Projekt → Einstellungen → Variablen und Geheimnisse:
+1. **Access einschalten:** Worker → Einstellungen → Domains & Routes → bei `workers.dev`
+   „Enable Cloudflare Access“. Unter „Manage Cloudflare Access“ die erlaubten E-Mail-Adressen eintragen.
+2. **Variablen setzen:** Worker → Einstellungen → Variablen und Geheimnisse:
    - `ACCESS_TEAM_DOMAIN` = `<team>.cloudflareaccess.com`
-   - `ACCESS_AUD` = „Application Audience (AUD) Tag“ aus der Access-Anwendung
+   - `ACCESS_AUD` = „Application Audience (AUD) Tag“ der Access-Anwendung
    - `ALLOWED_EMAILS` = optional, kommagetrennte E-Mail-Adressen (zweite Sicherung)
-4. Neu bereitstellen (Deployments → Retry), damit Bindung und Variablen greifen.
 
-Solange 1–3 fehlen, läuft die App rein lokal im Browser (grauer Punkt oben rechts).
+Die D1-Bindung steht in `wrangler.jsonc` und muss nicht im Dashboard gesetzt werden.
+Solange 1–2 fehlen, läuft die App rein lokal im Browser (grauer Punkt oben rechts).
 
 ## Lokal entwickeln
 
-Eine lokale `wrangler.toml` (nicht einchecken) mit `pages_build_output_dir = "."`, einer
-`[[d1_databases]]`-Bindung `DB` und `[vars] DEV_USER = "ich@example.com"` anlegen, dann:
-
 ```bash
+echo "DEV_USER=ich@example.com" > .dev.vars
 npx wrangler d1 execute DB --local --file schema.sql
-npx wrangler pages dev .
+npx wrangler dev
 ```
 
 `DEV_USER` überspringt Access und darf **nie** in Produktion gesetzt werden.
@@ -52,7 +49,7 @@ Ein anderer Benutzer lässt sich lokal mit dem Header `X-Dev-User` simulieren.
 
 ## App aktualisieren
 
-`index.html` ändern, dann `VERSION` in `sw.js` erhöhen (`"v2"` → `"v3"`) und beides pushen.
+`public/index.html` ändern, dann `VERSION` in `public/sw.js` erhöhen (`"v2"` → `"v3"`) und beides pushen.
 Ohne das behalten installierte Handys die alte Version im Cache.
 
 ## Lernplan
