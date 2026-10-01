@@ -30,11 +30,11 @@ eigene Karten pro Person und Synchronisierung über alle Geräte.
    „Enable Cloudflare Access“. Unter „Manage Cloudflare Access“ die erlaubten E-Mail-Adressen eintragen.
 2. **Variablen setzen:** Worker → Einstellungen → Variablen und Geheimnisse:
    - `ACCESS_TEAM_DOMAIN` = `<team>.cloudflareaccess.com`
-   - `ACCESS_AUD` = „Application Audience (AUD) Tag“ der Access-Anwendung
-   - `ALLOWED_EMAILS` = optional, kommagetrennte E-Mail-Adressen (zweite Sicherung)
+   - `ALLOWED_EMAILS` = kommagetrennte E-Mail-Adressen (zweite Sicherung, empfohlen)
+   - `ACCESS_AUD` = optional, „Application Audience (AUD) Tag“ der Access-Anwendung
 
 Die D1-Bindung steht in `wrangler.jsonc` und muss nicht im Dashboard gesetzt werden.
-Solange 1–2 fehlen, läuft die App rein lokal im Browser (grauer Punkt oben rechts).
+Solange `ACCESS_TEAM_DOMAIN` fehlt, läuft die App rein lokal im Browser (grauer Punkt oben rechts).
 
 ## Lokal entwickeln
 

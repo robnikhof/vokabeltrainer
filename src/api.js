@@ -14,7 +14,7 @@
  * Environment (Pages project -> Settings):
  *   DB                  D1 binding (required)
  *   ACCESS_TEAM_DOMAIN  e.g. "meinteam.cloudflareaccess.com" (required)
- *   ACCESS_AUD          Application Audience (AUD) tag of the Access app (required)
+ *   ACCESS_AUD          optional: Application Audience (AUD) tag; if set, tokens must be issued for this app
  *   ALLOWED_EMAILS      optional, comma-separated allow-list
  *   DEV_USER            local development only: skips Access, never set in production
  */
@@ -29,8 +29,8 @@ export async function onRequest(context) {
   const path = url.pathname.replace(/\/+$/, "");
 
   if (!env.DB) return json({ error: "not_configured", detail: "D1-Binding 'DB' fehlt" }, 503);
-  if (!env.DEV_USER && (!env.ACCESS_TEAM_DOMAIN || !env.ACCESS_AUD)) {
-    return json({ error: "not_configured", detail: "ACCESS_TEAM_DOMAIN / ACCESS_AUD fehlen" }, 503);
+  if (!env.DEV_USER && !env.ACCESS_TEAM_DOMAIN) {
+    return json({ error: "not_configured", detail: "ACCESS_TEAM_DOMAIN fehlt" }, 503);
   }
 
   let user;
@@ -133,7 +133,7 @@ async function authenticate(request, env) {
 
   const team = String(env.ACCESS_TEAM_DOMAIN || "").replace(/^https?:\/\//, "").replace(/\/.*$/, "");
   const aud = String(env.ACCESS_AUD || "").trim();
-  if (!team || !aud) throw new Error("ACCESS_TEAM_DOMAIN / ACCESS_AUD nicht gesetzt");
+  if (!team) throw new Error("ACCESS_TEAM_DOMAIN nicht gesetzt");
 
   const token = request.headers.get("Cf-Access-Jwt-Assertion") || readCookie(request, "CF_Authorization");
   if (!token) return null;
@@ -186,8 +186,10 @@ async function verifyAccessJwt(token, team, aud) {
   const now = Math.floor(Date.now() / 1000);
   if (typeof payload.exp === "number" && payload.exp < now) throw new Error("JWT abgelaufen");
   if (typeof payload.nbf === "number" && payload.nbf > now + 60) throw new Error("JWT noch nicht gültig");
-  const auds = Array.isArray(payload.aud) ? payload.aud : [payload.aud];
-  if (auds.indexOf(aud) === -1) throw new Error("JWT-Audience passt nicht");
+  if (aud) {
+    const auds = Array.isArray(payload.aud) ? payload.aud : [payload.aud];
+    if (auds.indexOf(aud) === -1) throw new Error("JWT-Audience passt nicht");
+  }
   if (payload.iss && payload.iss !== "https://" + team) throw new Error("JWT-Aussteller passt nicht");
   return payload;
 }
