@@ -5,6 +5,7 @@
  *   GET  /api/sync?since=<ms>    -> { serverTime, cards: [...], settings: {...}|null }
  *   POST /api/sync               <- { cards: [...], settings: {...}|null }
  *                                -> { serverTime, accepted }
+ *   POST /api/translate          <- { text, lang } -> { result, cached }   (siehe translate.js)
  *
  * Login: every person has a personal access key, stored as a Worker secret
  * named USERKEY_<NAME> (e.g. USERKEY_ROBERT, USERKEY_HEIKE). The app sends it
@@ -16,6 +17,8 @@
  *   USERKEY_<NAME>  one secret per person (required, at least one)
  *   DEV_USER        local development only: skips the key check, never set in production
  */
+
+import { translate } from "./translate.js";
 
 const MAX_CARDS_PER_PUSH = 500;
 const MAX_CARD_BYTES = 16 * 1024;
@@ -45,6 +48,9 @@ export async function onRequest(context) {
     }
     if (path === "/api/sync" && request.method === "POST") {
       return await push(env, user, request);
+    }
+    if (path === "/api/translate" && request.method === "POST") {
+      return await translate(env, user, request);
     }
     return json({ error: "not_found" }, 404);
   } catch (e) {

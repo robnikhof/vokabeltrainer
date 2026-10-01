@@ -1,6 +1,6 @@
 /* Vokabeltrainer service worker.
    Bump VERSION whenever you change index.html so installed phones pick up the new build. */
-var VERSION = "v3";
+var VERSION = "v4";
 var SHELL = "vokabeltrainer-shell-" + VERSION;
 var RUNTIME = "vokabeltrainer-runtime-" + VERSION;
 

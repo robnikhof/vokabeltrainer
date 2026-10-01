@@ -19,3 +19,19 @@ CREATE TABLE IF NOT EXISTS settings (
   updated_at INTEGER NOT NULL,
   srv        INTEGER NOT NULL
 );
+
+-- Nachschlagen: Cache für Übersetzungen (gemeinsam für alle) und Tageszähler pro Person.
+CREATE TABLE IF NOT EXISTS lookups (
+  lang    TEXT    NOT NULL,
+  q       TEXT    NOT NULL,
+  data    TEXT    NOT NULL,
+  created INTEGER NOT NULL,
+  PRIMARY KEY (lang, q)
+);
+
+CREATE TABLE IF NOT EXISTS lookup_usage (
+  user TEXT    NOT NULL,
+  day  TEXT    NOT NULL,
+  n    INTEGER NOT NULL DEFAULT 0,
+  PRIMARY KEY (user, day)
+);

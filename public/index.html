@@ -211,6 +211,29 @@
     border:1px solid var(--rule-strong);color:var(--butter-mute);flex:none;font-family:var(--sans);
   }
 
+  /* ---------- nachschlagen ---------- */
+  .lookup{margin-bottom:22px;padding-bottom:20px;border-bottom:1px solid var(--rule);display:flex;flex-direction:column;gap:7px}
+  .lookup .lbl{font-size:11px;letter-spacing:.14em;text-transform:uppercase;color:var(--butter-mute);font-weight:600}
+  .lookup-row{display:flex;gap:7px}
+  .lookup-row input{flex:1;min-width:0;width:auto;background:var(--cocoa);border:1px solid var(--rule);border-radius:10px;padding:13px 14px;color:var(--butter-bright)}
+  .lookup-row input:focus{border-color:var(--rule-strong);outline:none;background:var(--lift)}
+  .lookup-row input::-webkit-search-cancel-button{display:none}
+  .lookup-go{flex:none;width:50px;border-radius:10px;background:var(--lift);border:1px solid var(--rule-strong);display:flex;align-items:center;justify-content:center;color:var(--butter-bright)}
+  .lookup-go:hover{background:var(--lift-2)}
+  .lookup-go:disabled{opacity:.5;cursor:default}
+  .lookup-msg{margin:2px 0 0;font-size:13px;color:var(--butter-mute)}
+  .lookup-msg[data-kind="error"]{color:var(--again)}
+  .lookup-card{margin-top:6px;padding:16px;border-radius:12px;background:var(--cocoa);border:1px solid var(--rule-strong)}
+  .lk-head{display:flex;align-items:center;gap:8px;flex-wrap:wrap}
+  .lk-term{font-family:var(--serif);font-size:30px;line-height:1.1;color:var(--butter-bright);margin-right:4px}
+  .lk-meaning{margin:8px 0 0;font-size:19px;font-weight:500;color:var(--butter)}
+  .lk-alts{margin-top:10px}
+  .lk-alts .chip{font-size:12px;padding:6px 11px}
+  .lk-example{margin:12px 0 0;font-family:var(--serif);font-style:italic;font-size:16px;line-height:1.45;color:var(--butter)}
+  .lk-example span{display:block;font-family:var(--sans);font-style:normal;font-size:13px;color:var(--butter-mute);margin-top:2px}
+  .lk-tip{margin:10px 0 0;font-size:13px;color:var(--butter-mute)}
+  .lk-dupe{margin:10px 0 0;font-size:13px;color:var(--accent)}
+
   /* ---------- deck ---------- */
   .stats{display:grid;grid-template-columns:repeat(4,1fr);border:1px solid var(--rule);border-radius:12px;overflow:hidden;margin-bottom:16px}
   .stat{padding:12px 6px;text-align:center;border-right:1px solid var(--rule)}
@@ -352,6 +375,32 @@
         <div class="field" id="add-lang-field">
           <span class="lbl">Sprache</span>
           <div class="chips" id="add-lang-chips"></div>
+        </div>
+        <div class="lookup" id="lookup">
+          <label for="f-lookup" class="lbl" id="lookup-label">Nachschlagen</label>
+          <div class="lookup-row">
+            <input type="search" id="f-lookup" autocapitalize="off" autocomplete="off" spellcheck="false" enterkeyhint="search" placeholder="Wort auf Deutsch oder in der Fremdsprache">
+            <button type="button" class="lookup-go" id="btn-lookup" aria-label="Nachschlagen">
+              <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" aria-hidden="true"><circle cx="11" cy="11" r="6.5"/><path d="m16 16 4.5 4.5"/></svg>
+            </button>
+          </div>
+          <p class="lookup-msg" id="lookup-msg" hidden></p>
+          <div class="lookup-card" id="lookup-card" hidden>
+            <div class="lk-head">
+              <span class="lk-term" id="lk-term"></span>
+              <span class="tag" id="lk-gender" hidden></span>
+              <span class="tag" id="lk-kind"></span>
+            </div>
+            <p class="lk-meaning" id="lk-meaning"></p>
+            <div class="chips lk-alts" id="lk-alts"></div>
+            <p class="lk-example" id="lk-example" hidden></p>
+            <p class="lk-tip" id="lk-tip" hidden></p>
+            <p class="lk-dupe" id="lk-dupe" hidden></p>
+            <div class="sheet-actions" style="margin-top:12px">
+              <button type="button" class="primary" id="lk-save">Als Karte speichern</button>
+              <button type="button" class="tool" id="lk-edit">Bearbeiten</button>
+            </div>
+          </div>
         </div>
         <div class="field">
           <label for="f-term" id="f-term-label">Fremdsprache</label>
@@ -1298,6 +1347,8 @@
       document.getElementById("f-term").focus();
     });
     document.getElementById("f-term-label").textContent = LANGS[lang].name;
+    document.getElementById("lookup-label").textContent = "Nachschlagen · " + LANGS[lang].name;
+    if(lookupResult && lookupResult.lang !== lang) clearLookup();
     document.getElementById("f-term").placeholder = (STARTERS[lang] && STARTERS[lang][0]) ? STARTERS[lang][0][0] : "";
     document.getElementById("f-term").lang = LANGS[lang].tts;
     buildAccents("accents", "f-term", lang);
@@ -1341,6 +1392,125 @@
     document.getElementById("f-term").focus();
     renderRecent(); renderAll();
     toast("Hinzugefügt – " + (term || meaning));
+  }
+
+  /* ===================== Nachschlagen ===================== */
+  var lookupResult = null;
+  var LOOKUP_ERRORS = {
+    translate_not_configured: "Das Nachschlagen ist noch nicht eingerichtet: Im Worker fehlt das Secret ANTHROPIC_API_KEY.",
+    translate_bad_key: "Der Anthropic-API-Schlüssel im Worker ist ungültig.",
+    limit_reached: "Tageslimit fürs Nachschlagen erreicht. Morgen geht es weiter.",
+    too_long: "Bitte nur ein Wort oder eine kurze Wendung eingeben."
+  };
+  function lookupMsg(text, kind){
+    var m = document.getElementById("lookup-msg");
+    m.hidden = !text; m.textContent = text || ""; m.dataset.kind = kind || "";
+  }
+  function normTerm(s){ return String(s || "").toLowerCase().replace(/\s+/g, " ").trim(); }
+  function doLookup(){
+    var input = document.getElementById("f-lookup");
+    var text = input.value.trim();
+    if(!text){ input.focus(); return; }
+    if(backend !== "online"){
+      lookupMsg(backend === "auth" ? "Bitte zuerst anmelden (Karten → Anmelden)." : "Nachschlagen braucht eine Internetverbindung.", "error");
+      return;
+    }
+    var lang = addLang();
+    var btn = document.getElementById("btn-lookup");
+    btn.disabled = true;
+    document.getElementById("lookup-card").hidden = true;
+    lookupMsg("Schlage nach …");
+    api("translate", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ text: text, lang: lang })
+    }).then(function(res){
+      showLookup(res.result);
+    }).catch(function(e){
+      if(e.kind === "auth") lookupMsg("Bitte zuerst anmelden (Karten → Anmelden).", "error");
+      else if(LOOKUP_ERRORS[e.message]) lookupMsg(LOOKUP_ERRORS[e.message], "error");
+      else if(e.message === "offline") lookupMsg("Keine Verbindung. Bitte später nochmal versuchen.", "error");
+      else lookupMsg("Nachschlagen hat nicht geklappt. Bitte nochmal versuchen.", "error");
+    }).then(function(){ btn.disabled = false; });
+  }
+  function showLookup(r){
+    lookupResult = r;
+    var card = document.getElementById("lookup-card");
+    if(!r || !r.found || !r.term){
+      card.hidden = true;
+      lookupMsg("Dazu habe ich nichts gefunden. Schreibweise prüfen?", "error");
+      return;
+    }
+    lookupMsg("");
+    document.getElementById("lk-term").textContent = r.term;
+    var g = document.getElementById("lk-gender");
+    g.hidden = !r.gender; g.textContent = r.gender || "";
+    document.getElementById("lk-kind").textContent = KIND_LABEL[r.kind] || "Wort";
+    document.getElementById("lk-meaning").textContent = r.meaning;
+    var alts = document.getElementById("lk-alts");
+    alts.innerHTML = "";
+    (r.alternatives || []).forEach(function(a){
+      var b = document.createElement("button");
+      b.type = "button"; b.className = "chip"; b.textContent = a;
+      b.title = "Als Bedeutung übernehmen";
+      b.onclick = function(){
+        var i = r.alternatives.indexOf(a);
+        r.alternatives[i] = r.meaning; r.meaning = a;
+        showLookup(r);
+      };
+      alts.appendChild(b);
+    });
+    alts.hidden = !(r.alternatives || []).length;
+    var ex = document.getElementById("lk-example");
+    ex.innerHTML = "";
+    if(r.example){
+      ex.appendChild(document.createTextNode(r.example));
+      if(r.example_de){ var s = document.createElement("span"); s.textContent = r.example_de; ex.appendChild(s); }
+    }
+    ex.hidden = !r.example;
+    var tip = document.getElementById("lk-tip");
+    tip.hidden = !r.tip; tip.textContent = r.tip || "";
+    var dupe = live().some(function(c){ return c.lang === r.lang && normTerm(c.term) === normTerm(r.term); });
+    var d = document.getElementById("lk-dupe");
+    d.hidden = !dupe; d.textContent = "Steht schon in deinen Karten.";
+    document.getElementById("lk-save").textContent = dupe ? "Trotzdem speichern" : "Als Karte speichern";
+    card.hidden = false;
+  }
+  function lookupNote(r){
+    return [
+      r.gender,
+      r.tip,
+      r.example ? r.example + (r.example_de ? " – " + r.example_de : "") : ""
+    ].filter(Boolean).join(" · ");
+  }
+  function clearLookup(){
+    lookupResult = null;
+    document.getElementById("f-lookup").value = "";
+    document.getElementById("lookup-card").hidden = true;
+    lookupMsg("");
+  }
+  function saveLookup(){
+    var r = lookupResult;
+    if(!r) return;
+    var c = newCard(r.lang, r.term, r.meaning, lookupNote(r), r.kind);
+    local.addLang = r.lang; persistLocal();
+    saveCard(c);
+    addedThisSession.unshift(c.id);
+    clearLookup();
+    renderRecent(); renderAll();
+    toast("Gespeichert – " + c.term);
+    document.getElementById("f-lookup").focus();
+  }
+  function editLookup(){
+    var r = lookupResult;
+    if(!r) return;
+    document.getElementById("f-term").value = r.term;
+    document.getElementById("f-meaning").value = r.meaning;
+    document.getElementById("f-note").value = lookupNote(r);
+    addKind = r.kind || "word";
+    clearLookup();
+    renderAddForm();
+    document.getElementById("f-meaning").focus();
   }
 
   /* ===================== Editor ===================== */
@@ -1556,6 +1726,12 @@
     };
 
     document.getElementById("add-form").onsubmit = function(e){ e.preventDefault(); submitAdd(); };
+    document.getElementById("f-lookup").addEventListener("keydown", function(e){
+      if(e.key === "Enter"){ e.preventDefault(); doLookup(); }
+    });
+    document.getElementById("btn-lookup").onclick = doLookup;
+    document.getElementById("lk-save").onclick = saveLookup;
+    document.getElementById("lk-edit").onclick = editLookup;
     document.getElementById("f-term").addEventListener("keydown", function(e){
       if(e.key === "Enter" && !e.metaKey && !e.ctrlKey){ e.preventDefault(); document.getElementById("f-meaning").focus(); }
     });

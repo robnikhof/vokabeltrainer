@@ -13,6 +13,7 @@ eigene Karten pro Person und Synchronisierung über alle Geräte.
 | `public/sw.js` | Service Worker, damit die App offline startet |
 | `public/manifest.webmanifest`, `public/*.png` | Installation als App auf dem Homescreen |
 | `src/worker.js`, `src/api.js` | Cloudflare Worker mit API (`/api/me`, `/api/sync`) |
+| `src/translate.js` | Nachschlagen über die Claude API (`/api/translate`) |
 | `wrangler.jsonc` | Worker-Konfiguration inkl. D1-Bindung |
 | `schema.sql` | Tabellen der D1-Datenbank |
 
@@ -30,6 +31,13 @@ Pro Person ein Secret im Worker anlegen (Settings → Variables and Secrets, Typ
 
 - `USERKEY_ROBERT` = langer Zufallsschlüssel (mind. 20 Zeichen)
 - `USERKEY_HEIKE` = langer Zufallsschlüssel
+
+Für das **Nachschlagen** (Tab „Neu“) zusätzlich:
+
+- `ANTHROPIC_API_KEY` = API-Schlüssel aus der Claude Console (Secret)
+- optional `ANTHROPIC_MODEL` (Standard `claude-haiku-4-5-20251001`), `LOOKUP_DAILY_LIMIT` (Standard 200 pro Person und Tag)
+
+Nachgeschlagene Wörter werden in D1 (`lookups`) zwischengespeichert, wiederholte Abfragen kosten nichts.
 
 Neue Person: weiteres Secret `USERKEY_<NAME>` anlegen. Schlüssel erzeugen z. B. mit
 `python3 -c "import secrets; print(secrets.token_urlsafe(24))"`.
